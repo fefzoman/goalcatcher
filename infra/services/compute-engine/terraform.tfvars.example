@@ -1,7 +1,0 @@
-machine_type        = "e2-micro"
-boot_disk_size_gb    = 10
-deletion_protection = true
-
-labels = {
-  environment = "production"
-}

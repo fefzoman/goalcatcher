@@ -3,6 +3,23 @@ name = "goalcatcher"
 version = "0.1.0"
 description = "Firestore-backed football threshold monitor and Telegram alerts"
 requires-python = ">=3.11"
+dependencies = [
+    "google-cloud-firestore>=2.29,<3",
+    "httpx>=0.28,<1",
+    "python-dotenv>=1,<2",
+    "PyYAML>=6,<7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.12,<1",
+]
+
+# src/ is imported in place (see tool.pytest pythonpath); there is nothing to build.
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

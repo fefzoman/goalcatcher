@@ -1,4 +1,0 @@
--r requirements.in
-pytest>=8,<10
-pytest-cov>=6,<8
-ruff>=0.12,<1

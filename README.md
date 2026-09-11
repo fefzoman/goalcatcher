@@ -37,9 +37,9 @@ src/
 config/teams.yaml     monitored teams, competitions, aliases and thresholds
 deploy/football-goal-alert.service
 tests/                offline evaluator, HTTP, persistence and daemon tests
-infra/services/       project-services, networking, iam, firestore, compute-engine
-requirements.txt      locked runtime dependencies
-requirements-dev.txt  locked runtime and test/lint dependencies
+infra/                project-services, networking, iam, firestore, compute-engine
+pyproject.toml        project metadata, dependencies and tool configuration
+uv.lock               locked runtime and development dependencies
 .env.example          non-secret configuration template
 ```
 
@@ -49,21 +49,17 @@ Every infrastructure service keeps its own folder and `stack.tm.hcl`. See the
 
 ## Local setup
 
-Requires Python 3.11+ and a Firestore Native database. From the repository root:
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+ and a Firestore Native
+database. From the repository root:
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+uv sync --python 3.11
 cp .env.example .env
-.venv/bin/python -m src.monitor --check-config
+uv run python -m src.monitor --check-config
 ```
 
-Alternatively, with `uv` installed:
-
-```bash
-uv venv --python 3.11 .venv
-uv pip sync requirements-dev.txt
-```
+`uv sync` creates `.venv` from `uv.lock` with the runtime and development
+dependencies; pass `--no-dev` for the runtime set alone.
 
 Edit `.env` with your project, API-Football key, Telegram bot token and chat ID.
 The bot must already be allowed to send messages to that chat. Keep `.env` out
@@ -168,19 +164,18 @@ reset their state without accepting the possibility of a duplicate.
 ## Deploy on the provisioned VM
 
 Provision the five Terramate service stacks following [infra/README.md](infra/README.md).
-Host initialization creates `football-alert`, a Python venv and the systemd unit;
-it does not upload the application or start it. Copy `src/`, `config/`,
-`requirements.txt`, and a private `.env` to `/opt/football-goal-alert/` through
-your approved deployment channel. Do not upload your local `.venv` or ADC files.
-On the VM:
+Host initialization creates `football-alert`, `uv`, a Python venv and the systemd
+unit; it does not upload the application or start it. Copy `src/`, `config/`,
+`pyproject.toml`, `uv.lock`, and a private `.env` to `/opt/football-goal-alert/`
+through your approved deployment channel. Do not upload your local `.venv` or ADC
+files. On the VM:
 
 ```bash
 sudo chown -R football-alert:football-alert /opt/football-goal-alert
 sudo chmod 600 /opt/football-goal-alert/.env
-sudo -u football-alert /opt/football-goal-alert/.venv/bin/python -m pip install \
-  -r /opt/football-goal-alert/requirements.txt
 cd /opt/football-goal-alert
-sudo -u football-alert .venv/bin/python -m src.monitor --check-config
+sudo -H -u football-alert uv sync --frozen --no-dev
+sudo -H -u football-alert uv run --frozen --no-dev python -m src.monitor --check-config
 sudo systemctl daemon-reload
 sudo systemctl enable --now football-goal-alert
 sudo systemctl status football-goal-alert
@@ -198,17 +193,19 @@ event names and fixture/watch IDs, never API keys, Telegram URLs or response bod
 ## Verification and dependencies
 
 ```bash
-.venv/bin/python -m pytest --cov=src --cov-report=term-missing
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-terraform -chdir=infra/services/compute-engine test
+uv run pytest --cov=src --cov-report=term-missing
+uv run ruff check .
+uv run ruff format --check .
+terraform -chdir=infra/compute-engine test
 ```
 
-Runtime and development lockfiles are generated from `.in` files with:
+Dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. Change
+them with:
 
 ```bash
-uv pip compile requirements.in --python-version 3.11 -o requirements.txt
-uv pip compile requirements-dev.in --python-version 3.11 -o requirements-dev.txt
+uv add httpx            # runtime dependency
+uv add --dev pytest     # development dependency
+uv lock --upgrade       # refresh every pin within the declared ranges
 ```
 
 Offline tests do not prove live provider aliases/coverage, GCP IAM permissions,
