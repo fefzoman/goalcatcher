@@ -1,0 +1,1 @@
+"""Football threshold monitoring service."""

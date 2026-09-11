@@ -1,0 +1,4 @@
+google-cloud-firestore>=2.29,<3
+httpx>=0.28,<1
+python-dotenv>=1,<2
+PyYAML>=6,<7
