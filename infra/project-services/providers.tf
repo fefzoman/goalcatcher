@@ -1,10 +1,6 @@
 # tflint-ignore-file: terraform_unused_declarations
 // TERRAMATE: GENERATED AUTOMATICALLY DO NOT EDIT
 
-locals {
-  terraform-git-repo = "goalcatcher"
-}
-
 terraform {
   required_providers {
     google = {
@@ -15,13 +11,11 @@ terraform {
 }
 
 provider "google" {
-  project = "replace-me"
+  project = "goalcatcher-508312"
   region  = "europe-central2"
   zone    = "europe-central2-a"
 
   default_labels = {
-    environment = "production"
-    project     = "goalcatcher"
-    managed-by  = "terraform"
+    managed-by = "terraform"
   }
 }

@@ -13,6 +13,16 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
+from google.api_core.exceptions import GoogleAPICallError
+from google.auth.exceptions import GoogleAuthError
+from google.cloud import secretmanager
+
+SECRET_IDS = {
+    "API_FOOTBALL_KEY_SECRET_ID": "football-goal-alert-api-football-key",
+    "TELEGRAM_BOT_TOKEN_SECRET_ID": "football-goal-alert-telegram-bot-token",
+    "TELEGRAM_CHAT_ID_SECRET_ID": "football-goal-alert-telegram-chat-id",
+}
+PLAINTEXT_SECRET_NAMES = ("API_FOOTBALL_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 
 def normalized(value: str) -> str:
@@ -123,18 +133,35 @@ class Settings:
     claim_timeout_seconds: int = 120
     request_timeout_seconds: int = 15
     max_delivery_attempts: int = 5
+    sheets_spreadsheet_id: str = "1-gZnwabNdLarv8ofDXRDh0XOzKa6g4Ozyx202ZPKEx8"
 
     @classmethod
-    def from_env(cls) -> Settings:
-        required = (
-            "GOOGLE_CLOUD_PROJECT",
-            "API_FOOTBALL_KEY",
-            "TELEGRAM_BOT_TOKEN",
-            "TELEGRAM_CHAT_ID",
-        )
-        for name in required:
-            if not os.environ.get(name, "").strip():
+    def from_env(cls, *, secret_client=None) -> Settings:
+        plaintext = next((name for name in PLAINTEXT_SECRET_NAMES if name in os.environ), None)
+        if plaintext:
+            raise ValueError(f"{plaintext} must be stored in Secret Manager, not the environment")
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        if not project_id:
+            raise ValueError("Missing environment variable: GOOGLE_CLOUD_PROJECT")
+        secret_ids = {}
+        for name, default in SECRET_IDS.items():
+            secret_id = os.environ.get(name, default).strip()
+            if not secret_id:
                 raise ValueError(f"Missing environment variable: {name}")
+            secret_ids[name] = secret_id
+        try:
+            secret_client = secret_client or secretmanager.SecretManagerServiceClient()
+            secrets = {
+                name: secret_client.access_secret_version(
+                    request={"name": f"projects/{project_id}/secrets/{secret_id}/versions/latest"}
+                ).payload.data.decode()
+                for name, secret_id in secret_ids.items()
+            }
+        except (GoogleAPICallError, GoogleAuthError, UnicodeDecodeError, AttributeError):
+            raise ValueError("Could not load application secrets from Secret Manager") from None
+        empty = next((name for name, value in secrets.items() if not value.strip()), None)
+        if empty:
+            raise ValueError(f"Secret has no value: {empty}")
         numbers = {}
         for name, default, minimum, maximum in (
             ("poll_seconds", 30, 5, 300),
@@ -160,11 +187,14 @@ class Settings:
         except ZoneInfoNotFoundError as exc:
             raise ValueError("TIMEZONE must be an installed IANA timezone") from exc
         return cls(
-            project_id=os.environ[required[0]],
-            api_key=os.environ[required[1]],
-            telegram_token=os.environ[required[2]],
-            telegram_chat_id=os.environ[required[3]],
+            project_id=project_id,
+            api_key=secrets["API_FOOTBALL_KEY_SECRET_ID"].strip(),
+            telegram_token=secrets["TELEGRAM_BOT_TOKEN_SECRET_ID"].strip(),
+            telegram_chat_id=secrets["TELEGRAM_CHAT_ID_SECRET_ID"].strip(),
             database_id=os.environ.get("FIRESTORE_DATABASE_ID", "(default)"),
             timezone=timezone,
+            sheets_spreadsheet_id=os.environ.get(
+                "GOOGLE_SHEETS_SPREADSHEET_ID", cls.sheets_spreadsheet_id
+            ).strip(),
             **numbers,
         )

@@ -13,7 +13,7 @@ generate_hcl "backend.tf" {
           path = "terraform.tfstate"
           } : {
           bucket = global.tf_state_bucket
-          prefix = "${global.tf_state_prefix}/${tm_trimprefix(terramate.stack.path.absolute, "/infra/")}"
+          prefix = "${tm_trimprefix(terramate.stack.path.absolute, "/infra/")}"
         }
       }
     }
@@ -24,10 +24,6 @@ generate_file "providers.tf" {
   content = <<EOT
 # tflint-ignore-file: terraform_unused_declarations
 // TERRAMATE: GENERATED AUTOMATICALLY DO NOT EDIT
-
-locals {
-  terraform-git-repo = "${global.git_repo}"
-}
 
 terraform {
   required_providers {
@@ -44,9 +40,7 @@ provider "google" {
   zone    = "${global.zone}"
 
   default_labels = {
-    environment = "${global.environment}"
-    project     = "${global.project_name}"
-    managed-by  = "terraform"
+    managed-by = "terraform"
   }
 }
 EOT
@@ -59,7 +53,6 @@ generate_file "tm_locals.tf" {
 // TERRAMATE: GENERATED AUTOMATICALLY DO NOT EDIT
 
 locals {
-  environment     = "${global.environment}"
   project_id      = "${global.project_id}"
   region          = "${global.region}"
   zone            = "${global.zone}"
@@ -70,7 +63,6 @@ locals {
   # For terraform_remote_state reads of sibling stacks
   tf_state_backend = "${global.tf_state_backend}"
   tf_state_bucket  = "${global.tf_state_bucket}"
-  tf_state_prefix  = "${global.tf_state_prefix}"
 }
 EOT
 }

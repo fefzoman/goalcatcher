@@ -5,6 +5,7 @@
 *.tfplan
 crash.log
 crash.*.log
+.terraform.lock.hcl
 
 # Local configuration can contain project- or operator-specific data
 *.tfvars

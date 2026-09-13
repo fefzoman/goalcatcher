@@ -1,8 +1,5 @@
 # Football goal alert infrastructure
 
-Terramate orchestrates a separate Terraform stack for each GCP service in the
-deployment described in `football_first_goal_architecture_proposal.md`. There is
-a single environment, so the stacks sit directly under `infra/`:
 
 ```text
 infra/
@@ -63,7 +60,9 @@ Together, the service stacks create:
 - an `e2-micro` Debian VM with Shielded VM features enabled;
 - a Firestore Native database for team IDs, fixture watches, state transitions,
   and alert deduplication;
-- a VM service account limited to Firestore access and writing logs and metrics;
+- three Secret Manager containers for the API-Football and Telegram credentials;
+- a VM service account limited to Firestore, its three secrets, and writing logs
+  and metrics;
 - optional SSH access restricted to Google IAP, including the IAM permissions
   required by `gcloud compute ssh`; and
 - the `football-goal-alert.service` systemd unit with `Restart=always` and
@@ -111,9 +110,33 @@ terraform -chdir=infra/firestore import \
   'projects/PROJECT_ID/databases/(default)'
 ```
 
-Configuration intentionally excludes `API_FOOTBALL_KEY`, `TELEGRAM_BOT_TOKEN`,
-and `TELEGRAM_CHAT_ID`; passing those through Terraform would store them in
-state.
+Terraform creates Secret Manager containers for `API_FOOTBALL_KEY`,
+`TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`, then grants the VM service account
+access to those three containers. Terraform intentionally creates no secret
+versions because values passed through Terraform would be stored in state. Add
+each value out of band after applying `project-services` and `iam`:
+
+```bash
+gcloud secrets versions add football-goal-alert-api-football-key \
+  --project=goalcatcher-508312 --data-file=-
+gcloud secrets versions add football-goal-alert-telegram-bot-token \
+  --project=goalcatcher-508312 --data-file=-
+gcloud secrets versions add football-goal-alert-telegram-chat-id \
+  --project=goalcatcher-508312 --data-file=-
+```
+
+Enter one value for each command and finish input with Ctrl-D. The application
+reads the latest enabled version at startup. Add a new version and restart the
+service to rotate a value; disable the previous version after the restart is
+verified.
+
+Google Sheets export uses the VM service account. The project-services stack
+enables `sheets.googleapis.com`, and the VM includes the Sheets OAuth scope.
+Share the destination spreadsheet with the email from
+`terraform -chdir=infra/iam output -raw service_account_email` as an editor.
+Spreadsheet access is granted by sharing the file, not a project IAM role.
+The app defaults to spreadsheet `1-gZnwabNdLarv8ofDXRDh0XOzKa6g4Ozyx202ZPKEx8`,
+tab `matches`; `GOOGLE_SHEETS_SPREADSHEET_ID` in `.env` can override it.
 
 By default, every service stores state in its own `terraform.tfstate` and reads
 dependency state from sibling folders. For GCS state, create a versioned bucket
@@ -181,40 +204,134 @@ before their prerequisites.
 
 ## Deploy the application
 
-Host initialization installs Python, creates the application user and directory
-layout, and installs the systemd unit. It does not start the unit until
-application code and a secret environment file exist.
+These steps assume Terraform has provisioned the VM and its startup script has
+finished. Host initialization installs Python, uv, the application user and the
+systemd unit, but does not start the application. The commands below use the
+current configuration: VM `football-goal-alert`, project `goalcatcher-508312`,
+zone `europe-central2-a`. Adjust them if `globals.tm.hcl` changes.
 
-Get the IAP connection command:
+### 1. Package and upload from your Mac
 
-```bash
-terraform -chdir=infra/compute-engine output -raw iap_ssh_command
-```
-
-Deploy `src/`, `config/`, `pyproject.toml`, and `uv.lock` to
-`/opt/football-goal-alert`, then install the locked dependencies with
-`uv sync --frozen --no-dev` from that directory. Then create this file directly
-on the VM:
+Your local `.env` contains only non-secret settings and Secret Manager IDs:
 
 ```dotenv
-API_FOOTBALL_KEY=replace-me
-TELEGRAM_BOT_TOKEN=replace-me
-TELEGRAM_CHAT_ID=replace-me
+GOOGLE_CLOUD_PROJECT=goalcatcher-508312
+FIRESTORE_DATABASE_ID=(default)
+API_FOOTBALL_KEY_SECRET_ID=football-goal-alert-api-football-key
+TELEGRAM_BOT_TOKEN_SECRET_ID=football-goal-alert-telegram-bot-token
+TELEGRAM_CHAT_ID_SECRET_ID=football-goal-alert-telegram-chat-id
+TIMEZONE=Europe/Kyiv
 ```
 
-Store it as `/opt/football-goal-alert/.env`, owned by `football-alert`, with mode
-`0600`, then enable the service:
+Never place `API_FOOTBALL_KEY`, `TELEGRAM_BOT_TOKEN`, or `TELEGRAM_CHAT_ID` in
+`.env`. The startup script supplies the project and database through
+`/etc/football-goal-alert.env`; the Secret Manager IDs remain in `.env`. If `.env`
+also defines the project or database, ensure they identify the production
+resources; `.env` takes precedence in the systemd unit.
+
+Package only the application files, unit and non-secret `.env`:
 
 ```bash
-sudo systemctl enable --now football-goal-alert
-sudo systemctl status football-goal-alert
-journalctl -u football-goal-alert -f
+cd /Users/odobrynin/goalcatcher
+
+DEPLOY_ARCHIVE=$(mktemp -t goalcatcher-deploy)
+tar --exclude='__pycache__' -czf "$DEPLOY_ARCHIVE" \
+  src config pyproject.toml uv.lock deploy/football-goal-alert.service .env
+
+gcloud compute scp "$DEPLOY_ARCHIVE" \
+  football-goal-alert:~/goalcatcher-deploy.tar.gz \
+  --project=goalcatcher-508312 \
+  --zone=europe-central2-a \
+  --tunnel-through-iap
 ```
 
-The startup script supplies `GOOGLE_CLOUD_PROJECT` and `FIRESTORE_DATABASE_ID`
-through `/etc/football-goal-alert.env`, using the Firestore stack output. The
-service loads that file before the secret `.env`; the application must use those
-values when creating its Firestore client.
+### 2. Connect to the VM
+
+```bash
+gcloud compute ssh football-goal-alert \
+  --project=goalcatcher-508312 \
+  --zone=europe-central2-a \
+  --tunnel-through-iap
+```
+
+Alternatively, get the current connection command from the repository root with
+`terraform -chdir=infra/compute-engine output -raw iap_ssh_command`.
+
+### 3. Install and validate on the VM
+
+Stop the service before replacing application files, then install the locked
+runtime dependencies and the current systemd unit:
+
+```bash
+sudo systemctl stop football-goal-alert
+
+sudo tar -xzf ~/goalcatcher-deploy.tar.gz \
+  -C /opt/football-goal-alert
+
+sudo chown -R football-alert:football-alert /opt/football-goal-alert
+sudo chmod 600 /opt/football-goal-alert/.env
+
+cd /opt/football-goal-alert
+sudo -H -u football-alert uv sync --frozen --no-dev
+
+sudo install -m 0644 deploy/football-goal-alert.service \
+  /etc/systemd/system/football-goal-alert.service
+
+sudo -u football-alert .venv/bin/python -m src.monitor --check-config
+```
+
+Continue only if dependency installation and configuration validation succeed.
+`--check-config` validates team configuration offline; it does not check live
+credentials, Firestore permissions or spreadsheet access. Verify Secret Manager
+access separately without printing values:
+
+```bash
+sudo -u football-alert .venv/bin/python -c \
+  'from src.config import Settings; Settings.from_env(); print("Secrets accessible")'
+```
+
+### 4. Grant spreadsheet access
+
+Apply the current Terraform changes enabling `sheets.googleapis.com` and the VM's
+Sheets OAuth scope before starting the exporter. Share
+[the destination spreadsheet](https://docs.google.com/spreadsheets/d/1-gZnwabNdLarv8ofDXRDh0XOzKa6g4Ozyx202ZPKEx8/edit)
+as **Editor** with the VM service account:
+
+```text
+football-goal-alert-vm@goalcatcher-508312.iam.gserviceaccount.com
+```
+
+If configuration changes, get the actual email from your local repository with
+`terraform -chdir=infra/iam output -raw service_account_email`. The app uses this
+attached service account on the VM and appends selected matches to the `matches`
+tab. It does not require copying your local Google credentials to the VM.
+
+### 5. Start and verify
+
+On the VM:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable football-goal-alert
+sudo systemctl restart football-goal-alert
+
+sudo systemctl status football-goal-alert --no-pager
+sudo systemctl is-enabled football-goal-alert
+sudo journalctl -u football-goal-alert -n 100 --no-pager
+```
+
+Expect `active (running)`, `enabled`, and a `monitor_started` log event.
+Successful discovery and export produce `discovery_complete` and
+`sheets_export_complete`. Investigate repeated `monitor_error`,
+`football_backoff` or `sheets_export_failed` events. To follow logs continuously:
+
+```bash
+sudo journalctl -u football-goal-alert -f
+```
+
+Status, log checks and offline configuration validation consume no football API
+requests. Starting or restarting the monitor begins normal API activity.
+**The monitor currently has no hard enforcement of the 100-request daily limit.**
 
 Firestore holds all durable monitor state independently of the VM. Application
 files and the virtual environment are replaceable deployment artifacts and must

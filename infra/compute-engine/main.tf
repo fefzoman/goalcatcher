@@ -64,9 +64,11 @@ resource "google_compute_instance" "monitor" {
   service_account {
     email = data.terraform_remote_state.iam.outputs.service_account_email
     scopes = [
+      "https://www.googleapis.com/auth/cloud-platform",
       "https://www.googleapis.com/auth/datastore",
       "https://www.googleapis.com/auth/logging.write",
       "https://www.googleapis.com/auth/monitoring.write",
+      "https://www.googleapis.com/auth/spreadsheets",
     ]
   }
 

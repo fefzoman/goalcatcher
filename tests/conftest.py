@@ -67,6 +67,9 @@ class Reference:
     def set(self, value):
         self.collection.rows[self.id] = deepcopy(value)
 
+    def update(self, fields):
+        self.set({**self.collection.rows[self.id], **fields})
+
 
 class Collection:
     def __init__(self):
@@ -79,10 +82,19 @@ class Collection:
         return [Snapshot(key, value) for key, value in self.rows.items()]
 
     def where(self, *, filter):
-        assert filter.field_path == "state" and filter.op_string == "in"
+        assert (filter.field_path, filter.op_string) in {
+            ("state", "in"),
+            ("sheet_export_pending", "=="),
+        }
         collection = Collection()
         collection.rows = {
-            key: value for key, value in self.rows.items() if value["state"] in filter.value
+            key: value
+            for key, value in self.rows.items()
+            if (
+                value.get(filter.field_path) in filter.value
+                if filter.op_string == "in"
+                else value.get(filter.field_path) == filter.value
+            )
         }
         return collection
 
@@ -155,13 +167,14 @@ class API:
         self.rows = rows if rows is not None else [fixture()]
         self.daily_calls = []
         self.live_calls = []
+        self.event_calls = []
         self.coverage = True
         self.error = None
 
     def refresh_leagues(self):
         pass
 
-    def daily_fixtures(self, day, timezone):
+    def daily_fixtures(self, day, timezone, *, teams, cached_ids=None):
         self.daily_calls.append((day, timezone))
         if self.error:
             raise self.error
@@ -177,6 +190,7 @@ class API:
         return deepcopy([row for row in self.rows if row["fixture"]["id"] in ids])
 
     def events(self, fixture_id):
+        self.event_calls.append(fixture_id)
         return []
 
 

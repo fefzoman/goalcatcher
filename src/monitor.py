@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from src.api_football import FootballAPI, FootballError
 from src.config import Settings, Team, fingerprint, load_teams
 from src.evaluator import evaluate
+from src.sheets import GoogleSheets, SheetsError, match_rows
 from src.store import FirestoreStore
 from src.telegram import Telegram, format_alert
 
@@ -39,7 +40,15 @@ def parse_kickoff(fixture: dict) -> datetime:
 
 class Monitor:
     def __init__(
-        self, settings: Settings, teams: tuple[Team, ...], api, store, telegram, clock=utcnow
+        self,
+        settings: Settings,
+        teams: tuple[Team, ...],
+        api,
+        store,
+        telegram,
+        clock=utcnow,
+        *,
+        sheets=None,
     ):
         self.settings, self.teams = settings, teams
         self.api, self.store, self.telegram = api, store, telegram
@@ -48,6 +57,9 @@ class Monitor:
         self.next_discovery = datetime.min.replace(tzinfo=UTC)
         self.api_not_before = datetime.min.replace(tzinfo=UTC)
         self.api_failures = 0
+        self.sheets = sheets
+        self.sheets_not_before = datetime.min.replace(tzinfo=UTC)
+        self.sheets_failures = 0
 
     def _api_failure(self, exc: FootballError, now: datetime) -> None:
         self.api_failures += 1
@@ -65,7 +77,12 @@ class Monitor:
             key = f"discovery-{day.isoformat()}-{self.config_hash}"
             if self.store.discovery_done(key):
                 continue
-            fixtures = self.api.daily_fixtures(day.isoformat(), self.settings.timezone)
+            fixtures = self.api.daily_fixtures(
+                day.isoformat(),
+                self.settings.timezone,
+                teams=self.teams,
+                cached_ids=cached_ids,
+            )
             created = 0
             for fixture in fixtures:
                 for side in ("home", "away"):
@@ -118,7 +135,19 @@ class Monitor:
                     }
                     created += int(self.store.create_watch(watch))
             # A partial failure leaves this absent: retrying creates no duplicates.
-            self.store.finish_discovery(key, now)
+            sheet_export = None
+            if self.sheets is not None:
+                sheet_export = json.dumps(
+                    {
+                        "spreadsheet_id": self.settings.sheets_spreadsheet_id,
+                        "export_id": str(uuid.uuid4()),
+                        "day": day.isoformat(),
+                        "rows": match_rows(
+                            fixtures, self.teams, self.settings.timezone, cached_ids
+                        ),
+                    }
+                )
+            self.store.finish_discovery(key, now, sheet_export=sheet_export)
             log("discovery_complete", date=day, fixtures=len(fixtures), watches_created=created)
         tomorrow = local_day + timedelta(days=1)
         self.next_discovery = datetime.combine(tomorrow, time.min, timezone).astimezone(UTC)
@@ -305,11 +334,22 @@ class Monitor:
                     if fixture is None:
                         log("fixture_missing", fixture_id=fixture_id)
                         continue
-                    if "events" not in fixture or fixture["events"] is None:
+                    fixture_watches = [w for w in due if w["fixture_id"] == fixture_id]
+                    if ("events" not in fixture or fixture["events"] is None) and any(
+                        evaluate(
+                            fixture,
+                            w["api_team_id"],
+                            w["threshold"],
+                            self.settings.max_lateness_minutes,
+                        ).reason
+                        == "incomplete_match_data"
+                        for w in fixture_watches
+                    ):
+                        # Before the threshold, after the window, and for terminal
+                        # statuses, evaluation needs no goal timeline request.
                         fixture["events"] = self.api.events(fixture_id)
-                    for watch in due:
-                        if watch["fixture_id"] == fixture_id:
-                            self._update_fixture(watch, fixture, self.clock())
+                    for watch in fixture_watches:
+                        self._update_fixture(watch, fixture, self.clock())
                 self.api_failures = 0
             except FootballError as exc:
                 self._api_failure(exc, self.clock())
@@ -318,7 +358,30 @@ class Monitor:
                 log("live_fixture_invalid_data", fixture_ids=batch)
         if due:
             wakeups.append(self.clock() + timedelta(seconds=self.settings.poll_seconds))
+        self._export_matches()
         return max(self.clock() + timedelta(seconds=1), min(wakeups))
+
+    def _export_matches(self) -> None:
+        if self.sheets is None or self.clock() < self.sheets_not_before:
+            return
+        for job in self.store.pending_sheet_exports():
+            payload = json.loads(job["sheet_export_json"])
+            if payload["spreadsheet_id"] != self.settings.sheets_spreadsheet_id:
+                continue
+            try:
+                self.sheets.export(payload["export_id"], payload["rows"])
+            except SheetsError as exc:
+                self.sheets_failures += 1
+                self.sheets_not_before = self.clock() + timedelta(
+                    seconds=min(60 * 2 ** min(self.sheets_failures - 1, 6), 3600)
+                )
+                log("sheets_export_failed", reason=str(exc), day=payload["day"])
+                return
+            self.store.finish_sheet_export(job["id"], self.clock())
+            self.sheets_failures = 0
+            log("sheets_export_complete", day=payload["day"], matches=len(payload["rows"]))
+            # Bound Sheets work per tick so live fixture polling stays responsive.
+            return
 
     def run(self, stop: threading.Event) -> None:
         failures = 0
@@ -363,13 +426,20 @@ def main() -> None:
         settings.telegram_token, settings.telegram_chat_id, settings.request_timeout_seconds
     )
     store = FirestoreStore(settings.project_id, settings.database_id)
+    sheets = (
+        GoogleSheets(settings.sheets_spreadsheet_id, settings.request_timeout_seconds)
+        if settings.sheets_spreadsheet_id
+        else None
+    )
     log("monitor_started", teams=sum(team.enabled for team in teams), timezone=settings.timezone)
     try:
-        Monitor(settings, teams, api, store, telegram).run(stop)
+        Monitor(settings, teams, api, store, telegram, sheets=sheets).run(stop)
     finally:
         api.close()
         telegram.close()
         store.close()
+        if sheets is not None:
+            sheets.close()
         log("monitor_stopped")
 
 

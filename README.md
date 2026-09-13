@@ -31,6 +31,7 @@ src/
   monitor.py          daily discovery, polling, recovery and delivery claims
   api_football.py     API-Football v3 requests, batches and coverage checks
   telegram.py         plain-text alerts and delivery-outcome classification
+  sheets.py           append selected-match snapshots to Google Sheets
   store.py            transactional Firestore persistence
   evaluator.py        pure match/threshold rules
   config.py           YAML and environment validation
@@ -40,7 +41,7 @@ tests/                offline evaluator, HTTP, persistence and daemon tests
 infra/                project-services, networking, iam, firestore, compute-engine
 pyproject.toml        project metadata, dependencies and tool configuration
 uv.lock               locked runtime and development dependencies
-.env.example          non-secret configuration template
+.env                   local/deployed non-secret runtime configuration
 ```
 
 Every infrastructure service keeps its own folder and `stack.tm.hcl`. See the
@@ -54,18 +55,21 @@ database. From the repository root:
 
 ```bash
 uv sync --python 3.11
-cp .env.example .env
+install -m 600 /dev/null .env
 uv run python -m src.monitor --check-config
 ```
 
 `uv sync` creates `.venv` from `uv.lock` with the runtime and development
 dependencies; pass `--no-dev` for the runtime set alone.
 
-Edit `.env` with your project, API-Football key, Telegram bot token and chat ID.
-The bot must already be allowed to send messages to that chat. Keep `.env` out
-of Git (`chmod 600 .env`). Environment variables take precedence over `.env`.
+Keep non-secret settings and the three Secret Manager IDs in `.env`. The
+API-Football key, Telegram bot token and Telegram chat ID are loaded from the
+latest enabled secret versions and must never be stored in `.env`. The bot must
+already be allowed to send messages to that chat. Environment variables take
+precedence over `.env`.
 
-For local development against GCP, use Application Default Credentials:
+For local development against GCP, use Application Default Credentials with
+permission to access the configured secrets:
 
 ```bash
 gcloud auth application-default login
@@ -99,6 +103,12 @@ fixture's season. Cups, friendlies and international competitions are excluded.
 An unmatched alias or league produces no watch; inspect discovery counts and
 the `team_ids` collection when commissioning the service.
 
+`FootballAPI.daily_fixtures(date, timezone, teams=teams, cached_ids=cached_ids)`
+requires the selected team configuration and returns only its enabled teams'
+matching league fixtures. It filters one daily API response locally to conserve
+quota; an empty or entirely disabled selection makes no request. Standalone
+callers can use `load_teams("config/teams.yaml")` and omit `cached_ids`.
+
 **West Ham remains configured for Championship, as supplied.** Verify that choice
 before deployment; this implementation does not silently change competitions.
 
@@ -109,7 +119,10 @@ before deployment; this implementation does not silently change competitions.
   date/config-fingerprint marker prevents repeated successful discovery on reboot.
 - A watch wakes at kickoff + threshold − 30 seconds, then polls every 30 seconds.
   Halftime and delayed kickoffs are evaluated using the provider's match clock,
-  not elapsed wall time. Live IDs are batched in groups of at most 20.
+  not elapsed wall time. Live refresh uses one `id` lookup per unique due fixture;
+  the free plan rejects the bulk `ids` parameter. Both selected teams in one match
+  share that lookup. A separate events request is made only if the response lacks
+  events and threshold evaluation needs the goal timeline.
 - Firestore active watches refresh at least every minute, including when there
   are no live API calls. API errors/quota limits back off exponentially; there
   are no hidden HTTP delivery retries.
@@ -122,10 +135,64 @@ before deployment; this implementation does not silently change competitions.
   later day's discovery if its date is fetched. Intraday schedule refresh and
   manually reopening postponed fixtures are follow-up work, not guaranteed here.
 
-Optional `.env` controls (defaults are in `.env.example`): `POLL_SECONDS`,
+Optional `.env` controls (defaults are defined in `Settings`): `POLL_SECONDS`,
 `PRECHECK_SECONDS`, `CONFIRMATION_SECONDS`, `MAX_LATENESS_MINUTES`,
 `MAX_FIXTURE_AGE_HOURS`, `REQUEST_TIMEOUT_SECONDS`, `CLAIM_TIMEOUT_SECONDS`, and
 `MAX_DELIVERY_ATTEMPTS`. `TIMEZONE` defaults to `Europe/Kyiv`.
+
+## Google Sheets export
+
+After each successful daily fixture fetch, the monitor queues the selected matches
+for append to the `matches` tab in
+[the configured spreadsheet](https://docs.google.com/spreadsheets/d/1-gZnwabNdLarv8ofDXRDh0XOzKa6g4Ozyx202ZPKEx8/edit).
+Each fetch appends a new batch, including fixtures present in earlier fetches.
+Existing rows stay intact. The tab is created if missing, and an empty tab receives
+headers. A nonempty tab with different headers is left intact and logs
+`sheets_header_conflict` rather than writing data under the wrong columns.
+
+Columns are fixture ID, local kickoff, timezone, country, league, round, home/away
+teams, selected teams, thresholds, status, home/away goals and alert name. Alert
+name is `NO GOAL` when a selected team had not scored by its threshold, `TIE` when
+it had scored but the threshold score was tied, and empty when neither rule can be
+confirmed. A 0–0 result is `NO GOAL`. Both selected teams in the same fixture share
+one row; `NO GOAL` takes precedence if their results differ. These are snapshots at
+discovery time, not a continuously updated live scoreboard. Empty results append
+no rows. The exporter upgrades the previous 13-column schema and leaves historical
+alert names empty because those rows do not contain the goal timeline.
+
+`GOOGLE_SHEETS_SPREADSHEET_ID` overrides the default spreadsheet above. Set it to an
+empty value to disable export. Google Application Default Credentials must have
+the `https://www.googleapis.com/auth/spreadsheets` scope and editor access to the
+spreadsheet. Enable `sheets.googleapis.com` in the credentials' project. For a VM,
+share the spreadsheet with its service account email as an editor. The Terraform
+configuration enables the API and adds the VM's Sheets access scope.
+
+Local ADC created by ordinary `gcloud auth application-default login` may lack
+Sheets scope. Follow [Google's local ADC instructions](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment)
+for non-Cloud scopes, using your OAuth client and retaining Cloud access:
+
+```bash
+gcloud auth application-default login --client-id-file=OAUTH_CLIENT_JSON \
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets
+```
+
+Discovery completion and its pending export payload are saved together in
+Firestore's `runtime` document. Sheets failures retry with a separate backoff,
+without repeating football API calls or blocking alert delivery. Each append and
+its export marker are committed in one Sheets batch, so a lost response or failed
+Firestore acknowledgement can be retried without appending the batch twice.
+Discovery checkpoints still skip already completed dates on restart; a restart
+without a new fetch only retries pending exports.
+
+To append previously downloaded fixtures, with no football API calls:
+
+```bash
+uv run python -m src.sheets \
+  --fixtures-json outputs/matches-2026-09-12/fixtures.json
+```
+
+This command applies `config/teams.yaml` filters again and appends a new batch
+on every invocation. Use `--config` for a different team configuration.
 
 ## Firestore and duplicate prevention
 
@@ -135,6 +202,8 @@ Collections:
 - `watches/{fixture_id}--{team_key}`: immutable identity/threshold snapshot,
   kickoff, poll deadline, evaluation, revision and delivery attempt metadata.
 - `runtime/discovery-{date}-{config_hash}`: successful discovery checkpoints.
+  When export is enabled, also stores the pending Sheets payload and export
+  completion status, so retries survive a restart.
 
 Single-field state queries need no composite index. Application Default
 Credentials use the VM's attached service account in production; do not deploy
@@ -166,9 +235,9 @@ reset their state without accepting the possibility of a duplicate.
 Provision the five Terramate service stacks following [infra/README.md](infra/README.md).
 Host initialization creates `football-alert`, `uv`, a Python venv and the systemd
 unit; it does not upload the application or start it. Copy `src/`, `config/`,
-`pyproject.toml`, `uv.lock`, and a private `.env` to `/opt/football-goal-alert/`
-through your approved deployment channel. Do not upload your local `.venv` or ADC
-files. On the VM:
+`pyproject.toml`, `uv.lock`, and the non-secret `.env` to
+`/opt/football-goal-alert/` through your approved deployment channel. Do not
+upload your local `.venv` or ADC files. On the VM:
 
 ```bash
 sudo chown -R football-alert:football-alert /opt/football-goal-alert
@@ -187,6 +256,9 @@ in the VM startup script. For an already-running VM, install an updated unit
 to `/etc/systemd/system/football-goal-alert.service`, reload systemd and restart
 the service explicitly. Non-secret project/database values are also supplied by
 `/etc/football-goal-alert.env`; `.env` may override them, so check your deployment.
+Secret Manager IDs stay in `.env`. The VM service account reads only the three
+application secrets. Secret values are fetched at process startup and are never
+written to either environment file.
 The service runs unprivileged with systemd filesystem hardening. Logs contain
 event names and fixture/watch IDs, never API keys, Telegram URLs or response bodies.
 

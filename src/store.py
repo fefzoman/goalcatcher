@@ -68,8 +68,27 @@ class FirestoreStore:
     def discovery_done(self, key: str) -> bool:
         return self.client.collection("runtime").document(key).get().exists
 
-    def finish_discovery(self, key: str, now: datetime) -> None:
-        self.client.collection("runtime").document(key).set({"completed_at": now})
+    def finish_discovery(self, key: str, now: datetime, sheet_export: str | None = None) -> None:
+        fields = {"completed_at": now}
+        if sheet_export is not None:
+            fields.update(sheet_export_json=sheet_export, sheet_export_pending=True)
+        self.client.collection("runtime").document(key).set(fields)
+
+    def pending_sheet_exports(self) -> list[dict]:
+        return sorted(
+            [
+                {**snapshot.to_dict(), "id": snapshot.id}
+                for snapshot in self.client.collection("runtime")
+                .where(filter=FieldFilter("sheet_export_pending", "==", True))
+                .stream()
+            ],
+            key=lambda job: job["completed_at"],
+        )
+
+    def finish_sheet_export(self, key: str, now: datetime) -> None:
+        self.client.collection("runtime").document(key).update(
+            {"sheet_export_pending": False, "sheet_export_completed_at": now}
+        )
 
     def team_ids(self, config_hash: str) -> dict[str, int]:
         return {

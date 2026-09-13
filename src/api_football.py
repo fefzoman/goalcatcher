@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import httpx
+
+from src.config import Team
 
 
 class FootballError(RuntimeError):
@@ -49,15 +53,36 @@ class FootballAPI:
             raise FootballError("football_invalid_or_error_response") from None
         return rows
 
-    def daily_fixtures(self, date: str, timezone: str) -> list[dict]:
-        return self._get("/fixtures", {"date": date, "timezone": timezone})
+    def daily_fixtures(
+        self,
+        date: str,
+        timezone: str,
+        *,
+        teams: Sequence[Team],
+        cached_ids: Mapping[str, int] | None = None,
+    ) -> list[dict]:
+        """Return selected teams' league fixtures using at most one daily request."""
+        enabled = [team for team in teams if team.enabled]
+        if not enabled:
+            return []
+        cached_ids = cached_ids or {}
+        rows = self._get("/fixtures", {"date": date, "timezone": timezone})
+        return [
+            row
+            for row in rows
+            if any(
+                team.matches(row, row["teams"][side], cached_ids.get(team.key))
+                for team in enabled
+                for side in ("home", "away")
+            )
+        ]
 
     def fixtures(self, fixture_ids: list[int]) -> list[dict]:
+        """Fetch only requested fixtures using the free-plan-compatible id filter."""
         ids = list(dict.fromkeys(fixture_ids))
         rows = []
-        for start in range(0, len(ids), 20):
-            batch = ids[start : start + 20]
-            rows.extend(self._get("/fixtures", {"ids": "-".join(map(str, batch))}))
+        for fixture_id in ids:
+            rows.extend(self._get("/fixtures", {"id": fixture_id}))
         return rows
 
     def events(self, fixture_id: int) -> list[dict]:

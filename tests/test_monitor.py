@@ -39,6 +39,27 @@ def test_future_watch_does_not_poll_early(settings, team, store):
     assert stored_watch(store)["next_check_at"].isoformat() == "2026-09-11T12:31:30+00:00"
 
 
+@pytest.mark.parametrize(
+    ("minute", "status", "state", "event_calls"),
+    [
+        (31, "1H", "PENDING", []),
+        (33, "1H", "SENT", [100]),
+        (40, "1H", "MISSED_WINDOW", []),
+        (90, "FT", "MISSED_WINDOW", []),
+        (None, "PST", "SKIPPED", []),
+    ],
+)
+def test_events_fetched_only_when_threshold_evaluation_needs_them(
+    settings, team, store, minute, status, state, event_calls
+):
+    row = fixture(minute=minute, status=status)
+    del row["events"]
+    api = API([row])
+    Monitor(settings, (team,), api, store, Messenger(), Clock()).tick()
+    assert api.event_calls == event_calls
+    assert stored_watch(store)["state"] == state
+
+
 def test_first_goal_waits_for_possible_threshold_tie(settings, team, store):
     api, clock, sender = API([fixture(minute=31, events=[event(10)])]), Clock(), Messenger()
     monitor = Monitor(settings, (team,), api, store, sender, clock)

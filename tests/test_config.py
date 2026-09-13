@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -70,22 +71,38 @@ def test_exact_accent_normalization_and_id_override():
     assert not team.matches(row, row["teams"]["home"])
 
 
+class SecretClient:
+    def __init__(self, value="secret-value"):
+        self.value = value
+        self.names = []
+
+    def access_secret_version(self, request):
+        self.names.append(request["name"])
+        return SimpleNamespace(payload=SimpleNamespace(data=self.value.encode()))
+
+
 def set_required_env(monkeypatch):
-    for key in (
-        "GOOGLE_CLOUD_PROJECT",
-        "API_FOOTBALL_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_CHAT_ID",
-    ):
-        monkeypatch.setenv(key, "secret-value")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project")
 
 
 def test_env_validation_and_secret_repr(monkeypatch):
     set_required_env(monkeypatch)
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project")
-    settings = Settings.from_env()
+    client = SecretClient()
+    settings = Settings.from_env(secret_client=client)
     assert "secret-value" not in repr(settings)
     assert settings.timezone == "Europe/Kyiv"
+    assert client.names == [
+        "projects/project/secrets/football-goal-alert-api-football-key/versions/latest",
+        "projects/project/secrets/football-goal-alert-telegram-bot-token/versions/latest",
+        "projects/project/secrets/football-goal-alert-telegram-chat-id/versions/latest",
+    ]
+
+
+def test_plaintext_secret_environment_variables_are_rejected(monkeypatch):
+    set_required_env(monkeypatch)
+    monkeypatch.setenv("API_FOOTBALL_KEY", "plaintext-value")
+    with pytest.raises(ValueError, match="must be stored in Secret Manager"):
+        Settings.from_env(secret_client=SecretClient("managed-value"))
 
 
 @pytest.mark.parametrize(
@@ -95,14 +112,14 @@ def test_env_validation_and_secret_repr(monkeypatch):
         ("POLL_SECONDS", "oops"),
         ("CLAIM_TIMEOUT_SECONDS", "60"),
         ("TIMEZONE", "not-a-zone"),
-        ("API_FOOTBALL_KEY", ""),
+        ("API_FOOTBALL_KEY_SECRET_ID", ""),
     ],
 )
 def test_invalid_settings(monkeypatch, key, value):
     set_required_env(monkeypatch)
     monkeypatch.setenv(key, value)
     with pytest.raises(ValueError):
-        Settings.from_env()
+        Settings.from_env(secret_client=SecretClient())
 
 
 def test_offline_cli_does_not_require_credentials(monkeypatch, capsys):

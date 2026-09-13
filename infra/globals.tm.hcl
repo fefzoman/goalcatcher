@@ -2,12 +2,9 @@
 # infra/. Change values here rather than in a stack, then run
 # `terramate generate`.
 globals {
-  environment  = "production"
-  project_name = "goalcatcher"
-  git_repo     = "goalcatcher"
 
   # Google Cloud project that owns every resource. Replace before generating.
-  project_id = "replace-me"
+  project_id = "goalcatcher-508312"
 
   region = "europe-central2"
   zone   = "europe-central2-a"
@@ -24,7 +21,7 @@ globals {
 
   # Select one state backend for every stack and its dependency readers. For
   # GCS, set tf_state_backend = "gcs" and supply an existing versioned bucket.
-  tf_state_backend = "local"
-  tf_state_bucket  = ""
-  tf_state_prefix  = "goalcatcher/production"
+  tf_state_backend = "gcs"
+  tf_state_bucket  = "tf-state-goalcatcher"
+
 }

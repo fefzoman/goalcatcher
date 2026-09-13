@@ -7,7 +7,7 @@ data "terraform_remote_state" "networking" {
     path = "${path.module}/../networking/terraform.tfstate"
     } : {
     bucket = local.tf_state_bucket
-    prefix = "${local.tf_state_prefix}/networking"
+    prefix = "networking"
   }
 }
 
@@ -17,7 +17,7 @@ data "terraform_remote_state" "iam" {
     path = "${path.module}/../iam/terraform.tfstate"
     } : {
     bucket = local.tf_state_bucket
-    prefix = "${local.tf_state_prefix}/iam"
+    prefix = "iam"
   }
 }
 
@@ -27,6 +27,6 @@ data "terraform_remote_state" "firestore" {
     path = "${path.module}/../firestore/terraform.tfstate"
     } : {
     bucket = local.tf_state_bucket
-    prefix = "${local.tf_state_prefix}/firestore"
+    prefix = "firestore"
   }
 }
