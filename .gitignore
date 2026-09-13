@@ -30,6 +30,3 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
-.env
-.env.*
-!.env.example

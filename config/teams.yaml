@@ -1,161 +1,161 @@
-# Thresholds copied unchanged from thresholds.json. Names/aliases are exact
-# normalized matches, never fuzzy guesses. Pin api_team_id/api_league_id when
-# verified against your API-Football account; country remains a required guard.
+# Runtime source of truth for monitored teams. Names/aliases are exact normalized
+# matches, never fuzzy guesses. Pin api_team_id/api_league_id when verified
+# against your API-Football account; country remains a required guard.
 teams:
   - key: fc_porto
     display_name: FC Porto
     country: Portugal
     league: Primeira Liga
     aliases: [FC Porto, Porto]
-    threshold: 24
+    threshold: 34
   - key: psv
     display_name: PSV
     country: Netherlands
     league: Eredivisie
     aliases: [PSV Eindhoven]
-    threshold: 26
+    threshold: 36
   - key: inter_milan
     display_name: Inter Milan
     country: Italy
     league: Serie A
     aliases: [Inter, Internazionale]
-    threshold: 29
+    threshold: 39
   - key: benfica
     display_name: Benfica
     country: Portugal
     league: Primeira Liga
-    threshold: 29
+    threshold: 39
   - key: slavia_prague
     display_name: Slavia Prague
     country: Czech-Republic
     league: Czech First League
     league_aliases: [Czech Liga, First League]
     aliases: [Slavia Praha]
-    threshold: 29
+    threshold: 39
   - key: fenerbahce
     display_name: Fenerbahce
     country: Turkey
     league: Süper Lig
-    threshold: 29
+    threshold: 39
   - key: real_betis
     display_name: Real Betis
     country: Spain
     league: La Liga
-    threshold: 29
+    threshold: 39
   - key: galatasaray
     display_name: Galatasaray
     country: Turkey
     league: Süper Lig
-    threshold: 29
+    threshold: 39
   - key: agf_aarhus
     display_name: AGF Aarhus
     country: Denmark
     league: Danish Superliga
     league_aliases: [Superliga]
     aliases: [Aarhus, AGF]
-    threshold: 30
+    threshold: 40
   - key: manchester_city
     display_name: Manchester City
     country: England
     league: Premier League
-    threshold: 32
+    threshold: 42
   - key: bayern_munich
     display_name: Bayern Munich
     country: Germany
     league: Bundesliga
     aliases: [Bayern München, Bayern Munchen]
-    threshold: 33
+    threshold: 43
   - key: real_madrid
     display_name: Real Madrid
     country: Spain
     league: La Liga
-    threshold: 33
+    threshold: 43
   - key: rb_leipzig
     display_name: RB Leipzig
     country: Germany
     league: Bundesliga
-    threshold: 33
+    threshold: 43
   - key: sc_braga
     display_name: SC Braga
     country: Portugal
     league: Primeira Liga
     aliases: [SC Braga, Braga]
-    threshold: 33
+    threshold: 43
   - key: barcelona
     display_name: Barcelona
     country: Spain
     league: La Liga
-    threshold: 34
+    threshold: 44
   - key: dinamo_zagreb
     display_name: Dinamo Zagreb
     country: Croatia
     league: HNL
     aliases: [Dinamo Zagreb, GNK Dinamo Zagreb]
-    threshold: 34
+    threshold: 44
   - key: manchester_united
     display_name: Manchester United
     country: England
     league: Premier League
-    threshold: 34
+    threshold: 44
   - key: eintracht_frankfurt
     display_name: Eintracht Frankfurt
     country: Germany
     league: Bundesliga
-    threshold: 36
+    threshold: 46
   - key: liverpool
     display_name: Liverpool
     country: England
     league: Premier League
-    threshold: 36
+    threshold: 46
   - key: arsenal
     display_name: Arsenal
     country: England
     league: Premier League
-    threshold: 39
+    threshold: 49
   - key: psg
     display_name: PSG
     country: France
     league: Ligue 1
     aliases: [Paris Saint Germain, Paris Saint-Germain]
-    threshold: 39
+    threshold: 49
   - key: borussia_dortmund
     display_name: Borussia Dortmund
     country: Germany
     league: Bundesliga
-    threshold: 40
+    threshold: 50
   - key: vfb_stuttgart
     display_name: VfB Stuttgart
     country: Germany
     league: Bundesliga
-    threshold: 40
+    threshold: 50
   - key: feyenoord
     display_name: Feyenoord
     country: Netherlands
     league: Eredivisie
-    threshold: 41
+    threshold: 50
   - key: west_ham
     display_name: West Ham
     country: England
-    # Deliberately preserved from thresholds.json; verify before deployment.
+    # Deliberately preserved as supplied; verify before deployment.
     league: Championship
     aliases: [West Ham United]
-    threshold: 42
+    threshold: 50
   - key: sporting_cp
     display_name: Sporting CP
     country: Portugal
     league: Primeira Liga
     aliases: [Sporting, Sporting Lisbon]
-    threshold: 42
+    threshold: 50
   - key: shakhtar_donetsk
     display_name: Shakhtar Donetsk
     country: Ukraine
     league: Ukrainian PL
     league_aliases: [Premier League]
     aliases: [Shakhtar Donetsk, Shakhtar]
-    threshold: 44
+    threshold: 50
   - key: sturm_graz
     display_name: Sturm Graz
     country: Austria
     league: Austrian Bundesliga
     league_aliases: [Bundesliga]
-    threshold: 53
+    threshold: 50

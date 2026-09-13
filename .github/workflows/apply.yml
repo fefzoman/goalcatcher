@@ -1,0 +1,154 @@
+name: Terramate Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'deploy/football-goal-alert.service'   # watched by the compute-engine stack
+      - '**/*.tm.hcl'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Terramate tag to apply, e.g. networking (empty = all stacks)"
+        required: false
+        type: string
+      folder_path:
+        description: "Stack folder to apply, e.g. infra/compute-engine (mutually exclusive with tag)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write          # Workload Identity Federation
+  contents: read
+
+env:
+  TF_VERSION: ${{ vars.TF_VERSION || '1.16.0' }}
+  TM_VERSION: ${{ vars.TM_VERSION || '0.17.1' }}
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  # Single environment, no approval: a merge to main applies the changed stacks
+  # directly. There is no plan gate and no `environment:` — the PR plan comment
+  # is the review surface. Terramate's `after`/`wants` ordering means selecting a
+  # dependent stack pulls in its prerequisites in the right order.
+  apply:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: apply-production
+      cancel-in-progress: false              # never cancel an apply mid-flight
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: terramate-io/terramate-action@v3
+        with:
+          version: ${{ env.TM_VERSION }}
+          bindir: ${{ runner.temp }}/terramate-bin
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - run: terramate generate
+
+      - name: Detect changed stacks
+        id: detect
+        run: |
+          n=$(terramate list --changed --git-change-base "HEAD^" | grep -c . || true)
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Apply changed stacks
+        if: steps.detect.outputs.count != '0'
+        run: |
+          terramate run --parallel 5 --changed --git-change-base "HEAD^" -- terraform init  -input=false
+          terramate run --parallel 5 --changed --git-change-base "HEAD^" -- terraform apply -input=false -auto-approve
+
+  # ----------------------------------------------- manual dispatch: apply stacks
+  # Applies by tag or folder_path (no change detection). Use this for the first
+  # deployment, where nothing is "changed" relative to HEAD^ yet.
+  apply-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: apply-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve selection
+        id: sel
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_FOLDER_PATH: ${{ inputs.folder_path }}
+        run: |
+          set -euo pipefail
+          tag="$INPUT_TAG"
+          folder_path="${INPUT_FOLDER_PATH#./}"; folder_path="${folder_path%/}"
+
+          if [ -n "$tag" ] && [ -n "$folder_path" ]; then
+            echo "::error::Provide either tag or folder_path, not both."; exit 1
+          fi
+          if [ -n "$tag" ]; then
+            case "$tag" in *[!A-Za-z0-9_.:-]*) echo "::error::tag may only contain letters, numbers, '.', '_', '-', ':'."; exit 1;; esac
+          fi
+
+          if [ -n "$folder_path" ]; then
+            case "$folder_path" in
+              /*|*..*|*[!A-Za-z0-9_./-]*) echo "::error::folder_path must be a relative path without '..'."; exit 1;;
+            esac
+            case "$folder_path" in
+              infra|infra/*) ;;
+              *) echo "::error::folder_path must be under infra/."; exit 1;;
+            esac
+            [ -d "$folder_path" ] || { echo "::error::folder_path does not exist: $folder_path"; exit 1; }
+            echo "mode=path" >>"$GITHUB_OUTPUT"
+            echo "chdir=$folder_path" >>"$GITHUB_OUTPUT"
+          elif [ -n "$tag" ]; then
+            echo "mode=tag" >>"$GITHUB_OUTPUT"
+            echo "tags=$tag" >>"$GITHUB_OUTPUT"
+          else
+            # Every stack carries the `production` tag = the whole environment.
+            echo "mode=tag" >>"$GITHUB_OUTPUT"
+            echo "tags=production" >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: terramate-io/terramate-action@v3
+        with:
+          version: ${{ env.TM_VERSION }}
+          bindir: ${{ runner.temp }}/terramate-bin
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - run: terramate generate
+
+      - name: Apply selected stacks
+        env:
+          TM_MODE: ${{ steps.sel.outputs.mode }}
+          TM_CHDIR: ${{ steps.sel.outputs.chdir }}
+          TM_TAGS: ${{ steps.sel.outputs.tags }}
+        run: |
+          set -euo pipefail
+          case "$TM_MODE" in
+            path) args=(--parallel 5 -C "$TM_CHDIR");;
+            tag)  args=(--parallel 5 --tags "$TM_TAGS");;
+            *)    echo "::error::unsupported mode: $TM_MODE"; exit 1;;
+          esac
+          terramate run "${args[@]}" -- terraform init  -input=false
+          terramate run "${args[@]}" -- terraform apply -input=false -auto-approve
