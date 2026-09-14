@@ -64,7 +64,6 @@ The runtime flow is:
 
 - `src/`: application runtime; see `src/AGENTS.md`.
 - `config/`: monitored teams and thresholds; see `config/AGENTS.md`.
-- `tests/`: offline test doubles and behavioral coverage; see `tests/AGENTS.md`.
 - `infra/`: Terramate and Terraform stacks; see `infra/AGENTS.md`.
 - `deploy/`: systemd service definition; see `deploy/AGENTS.md`.
 - `outputs/`: generated local match artifacts; never treat them as runtime input
@@ -82,6 +81,6 @@ uv run pytest -q tests
 git diff --check
 ```
 
-Load the project `.env` when configuration behavior is relevant, but keep tests
-offline. For infrastructure, format and validate each affected stack and inspect
-every plan for replacement or destruction before applying it.
+Load the project `.env` when configuration behavior is relevant. 
+For infrastructure, format and validate each affected stack and 
+inspect every plan for replacement or destruction before applying it.
